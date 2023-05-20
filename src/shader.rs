@@ -6,6 +6,11 @@ use crate::graph::{Name, SocketType, SocketValue};
 pub enum Error {
     Missing(Side, Name),
     MismatchedTypes((Name, SocketType), (Name, SocketType)),
+    InvalidType {
+        name: Name,
+        got: SocketType,
+        expected: SocketType,
+    },
     Unknown,
 }
 
@@ -20,6 +25,18 @@ pub struct Shader {
 }
 
 impl Shader {
+    /// Creates a [Shader] from a shader function.
+    /// # Example
+    /// ```
+    /// Shader::new(|inputs, outputs| {
+    ///     get_sv!(input  | inputs  . "value" : Number > in_value);
+    ///     get_sv!(output | outputs . "value" : Number > out_value);
+    ///
+    ///     *out_value.get_or_insert(0.) = 1. - in_value.unwrap_or(0.);
+    ///
+    ///     Ok(())
+    /// })
+    /// ```
     pub fn new(
         func: fn(&HashMap<Name, SocketValue>, &mut HashMap<Name, SocketValue>) -> Result<(), Error>,
     ) -> Self {
@@ -102,20 +119,43 @@ where
 //     };
 // }
 
-/// `[get](std::collections::HashMap::get)`s the desired input/output field with error reporting
+#[macro_export]
+/// [get](std::collections::HashMap::get)s the desired input/output field with error reporting
 macro_rules! get_sv {
-    (input | $hashmap:ident > $field:literal > $name:ident) => {
+    (input | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
         let $name = $hashmap
             .get(&$field.into())
             .ok_or_else(|| Error::Missing(Side::Input, $field.into()))?;
+
+        #[rustfmt::skip]
+        let SocketValue::$type($name) = $name
+            else {
+                return Err(Error::InvalidType {
+                    name: $field.into(),
+                    got: SocketType::from($name),
+                    expected: SocketType::$type,
+                });
+            };
     };
 
-    (output | $hashmap:ident > $field:literal > $name:ident) => {
+    (output | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
         let $name = $hashmap
             .get_mut(&$field.into())
             .ok_or_else(|| Error::Missing(Side::Output, $field.into()))?;
+
+        #[rustfmt::skip]
+        let SocketValue::$type(ref mut $name) = $name
+            else {
+                return Err(Error::InvalidType {
+                    name: $field.into(),
+                    got: SocketType::from($name),
+                    expected: SocketType::$type,
+                });
+            };
     };
 }
+
+pub use get_sv;
 
 #[cfg(test)]
 mod test {
@@ -124,25 +164,15 @@ mod test {
     #[test]
     fn shader_function_type() {
         let mut inputs = HashMap::new();
-        inputs.insert("value".into(), SocketValue::Number(None));
+        inputs.insert("value".into(), SocketType::Number.into());
 
         Shader::new(|inputs, outputs| {
-            get_sv!(input | inputs > "value" > in_value);
-            get_sv!(output | outputs > "value" > out_value);
-
-            if !out_value.matches(in_value) {
-                return Err(Error::MismatchedTypes(
-                    ("value".into(), SocketType::from(in_value)),
-                    ("value".into(), SocketType::from(out_value.as_ref())),
-                ));
-            }
+            get_sv!( input | inputs  . "value" : Number > in_value);
+            get_sv!(output | outputs . "value" : Number > out_value);
 
             let initial = out_value.clone();
 
-            match out_value {
-                SocketValue::Number(ref mut number) => *number.get_or_insert(0.) += 1.,
-                e => unimplemented!("{e:?}"),
-            }
+            *out_value.get_or_insert(0.) += in_value.unwrap_or(0.);
 
             let modified = out_value.clone();
 
