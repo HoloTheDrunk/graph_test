@@ -43,5 +43,7 @@ fn main() {
             "inner": node!(import "invert" imported),
         outputs:
             "oFac": (ssref!(node "invert" "value"), SocketType::Number.into()),
-    });
+    }
+    .validate()
+    .unwrap());
 }

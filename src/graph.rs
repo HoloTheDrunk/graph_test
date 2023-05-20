@@ -1,4 +1,9 @@
-use std::{collections::HashMap, convert::AsRef, fmt::Debug};
+use std::{
+    collections::{HashMap, VecDeque},
+    convert::AsRef,
+    fmt::Debug,
+    marker::PhantomData,
+};
 
 use crate::shader::Shader;
 
@@ -111,21 +116,82 @@ macro_rules! ssref {
     };
 }
 
+macro_rules! states {
+    ($($state:tt),+ $(,)?) => {
+        $(
+            #[derive(Clone, Debug, Default, PartialEq)]
+            pub struct $state;
+        )+
+    };
+}
+states!(Unvalidated, Validated);
+
+#[derive(Debug)]
+pub enum Error {
+    Cycle(NodeId),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Graph {
+pub struct Graph<State> {
     pub inputs: HashMap<Name, SocketValue>,
     pub outputs: HashMap<Name, (Option<SocketRef>, SocketValue)>,
 
-    pub nodes: HashMap<NodeId, Node>,
+    pub nodes: HashMap<NodeId, Node<State>>,
+
+    pub state: PhantomData<State>,
 }
 
 #[macro_export]
 macro_rules! graph {
     { $($field:ident : $($name:literal : $value:expr),+),+ $(,)? } => {
         Graph {
-            $($field: [$(($name.into(), $value)),+].into_iter().collect()),+
+            $($field: [$(($name.into(), $value)),+].into_iter().collect()),+,
+            state: ::std::marker::PhantomData::<Unvalidated>,
         }
     };
+}
+
+impl Graph<Unvalidated> {
+    pub fn validate(self) -> Result<Graph<Validated>, Error> {
+        for output in self.outputs.iter() {
+            let mut path = Vec::<&NodeId>::new();
+            let mut next = VecDeque::new();
+            next.push_back({
+                let (_name, (Some(socket_ref), _value)) = output else {continue};
+                match socket_ref {
+                    SocketRef::Node(node_id, _name) => Some(node_id),
+                    SocketRef::Graph(_name) => None,
+                }
+            });
+
+            while let Some(Some(id)) = next.pop_front() {
+                // Check for cycle in graph
+                if path.contains(&id) {
+                    return Err(Error::Cycle(id.clone()));
+                }
+
+                path.push(id);
+
+                self.nodes.get(id).map(|node| {
+                    let inputs = match node {
+                        Node::Graph(graph_node) => graph_node.inputs.values(),
+                        // Node::Imported(imported_node) => imported_node.inner.inputs.values(),
+                        Node::Imported(_) => todo!(),
+                    };
+
+                    for socket_ref in inputs {
+                        match socket_ref {
+                            SocketRef::Node(node_id, _name) => next.push_back(Some(node_id)),
+                            // Ignore graph inputs
+                            SocketRef::Graph(_name) => continue,
+                        }
+                    }
+                });
+            }
+        }
+
+        todo!("Implement graph validation");
+    }
 }
 
 #[derive(Clone, Default)]
@@ -153,15 +219,19 @@ impl PartialEq for GraphNode {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct ImportedNode {
+pub struct ImportedNode<State> {
     pub name: Name,
 
-    inner: Graph,
+    // TODO: add inputs, refactor other node type to also have an input SocketType
+    // pub inputs: HashMap<Name, Option<SocketRef>>,
+    //
+    inner: Graph<State>,
 }
 
-impl<T: AsRef<str>> From<(T, Graph)> for ImportedNode {
-    fn from((name, inner): (T, Graph)) -> Self {
+impl<T: AsRef<str>, State> From<(T, Graph<State>)> for ImportedNode<State> {
+    fn from((name, inner): (T, Graph<State>)) -> Self {
         Self {
+            // inputs: inner.inputs.keys().map(|name| (name.clone(), ))
             name: Name::from(name.as_ref()),
             inner,
         }
@@ -169,12 +239,12 @@ impl<T: AsRef<str>> From<(T, Graph)> for ImportedNode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Node {
+pub enum Node<State> {
     Graph(GraphNode),
-    Imported(ImportedNode),
+    Imported(ImportedNode<State>),
 }
 
-impl Default for Node {
+impl<State> Default for Node<State> {
     fn default() -> Self {
         Self::Graph(GraphNode::default())
     }
@@ -275,6 +345,7 @@ mod test {
                 ),
             ))
             .collect(),
+            state: PhantomData::<Unvalidated>,
         };
 
         let r#macro = graph! {

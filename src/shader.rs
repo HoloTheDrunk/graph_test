@@ -125,15 +125,15 @@ macro_rules! get_sv {
     (input | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
         let $name = $hashmap
             .get(&$field.into())
-            .ok_or_else(|| Error::Missing(Side::Input, $field.into()))?;
+            .ok_or_else(|| crate::shader::Error::Missing(Side::Input, $field.into()))?;
 
         #[rustfmt::skip]
-        let SocketValue::$type($name) = $name
+        let crate::graph::SocketValue::$type($name) = $name
             else {
-                return Err(Error::InvalidType {
+                return Err(crate::shader::Error::InvalidType {
                     name: $field.into(),
-                    got: SocketType::from($name),
-                    expected: SocketType::$type,
+                    got: crate::graph::SocketType::from($name),
+                    expected: crate::graph::SocketType::$type,
                 });
             };
     };
@@ -141,15 +141,15 @@ macro_rules! get_sv {
     (output | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
         let $name = $hashmap
             .get_mut(&$field.into())
-            .ok_or_else(|| Error::Missing(Side::Output, $field.into()))?;
+            .ok_or_else(|| crate::shader::Error::Missing(Side::Output, $field.into()))?;
 
         #[rustfmt::skip]
-        let SocketValue::$type(ref mut $name) = $name
+        let crate::graph::SocketValue::$type(ref mut $name) = $name
             else {
-                return Err(Error::InvalidType {
+                return Err(crate::shader::Error::InvalidType {
                     name: $field.into(),
-                    got: SocketType::from($name),
-                    expected: SocketType::$type,
+                    got: crate::graph::SocketType::from($name),
+                    expected: crate::graph::SocketType::$type,
                 });
             };
     };
