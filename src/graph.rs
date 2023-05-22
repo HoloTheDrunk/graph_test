@@ -32,11 +32,11 @@ macro_rules! socket_value {
             }
         }
 
-        impl SocketValue {
-            pub fn matches(&self, other: &SocketValue) -> bool {
-                SocketType::from(self) == SocketType::from(other)
-            }
-        }
+        // impl SocketValue {
+        //     pub fn matches(&self, other: &SocketValue) -> bool {
+        //         SocketType::from(self) == SocketType::from(other)
+        //     }
+        // }
 
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub enum SocketType {
@@ -74,6 +74,11 @@ pub struct Name(String);
 impl From<&str> for Name {
     fn from(value: &str) -> Self {
         Self(value.to_string())
+    }
+}
+impl From<&Name> for String {
+    fn from(name: &Name) -> Self {
+        name.0.clone()
     }
 }
 
@@ -175,11 +180,10 @@ impl Graph<Unvalidated> {
                 self.nodes.get(id).map(|node| {
                     let inputs = match node {
                         Node::Graph(graph_node) => graph_node.inputs.values(),
-                        // Node::Imported(imported_node) => imported_node.inner.inputs.values(),
-                        Node::Imported(_) => todo!(),
+                        Node::Imported(imported_node) => imported_node.inputs.values(),
                     };
 
-                    for socket_ref in inputs {
+                    for socket_ref in inputs.flatten() {
                         match socket_ref {
                             SocketRef::Node(node_id, _name) => next.push_back(Some(node_id)),
                             // Ignore graph inputs
@@ -196,7 +200,7 @@ impl Graph<Unvalidated> {
 
 #[derive(Clone, Default)]
 pub struct GraphNode {
-    pub inputs: HashMap<Name, SocketRef>,
+    pub inputs: HashMap<Name, Option<SocketRef>>,
     pub outputs: HashMap<Name, SocketValue>,
 
     pub shader: Shader,
@@ -220,18 +224,25 @@ impl PartialEq for GraphNode {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedNode<State> {
-    pub name: Name,
-
-    // TODO: add inputs, refactor other node type to also have an input SocketType
-    // pub inputs: HashMap<Name, Option<SocketRef>>,
-    //
+    name: Name,
+    pub inputs: HashMap<Name, Option<SocketRef>>,
     inner: Graph<State>,
+}
+
+impl<State> ImportedNode<State> {
+    pub fn name(&self) -> &Name {
+        &self.name
+    }
 }
 
 impl<T: AsRef<str>, State> From<(T, Graph<State>)> for ImportedNode<State> {
     fn from((name, inner): (T, Graph<State>)) -> Self {
         Self {
-            // inputs: inner.inputs.keys().map(|name| (name.clone(), ))
+            inputs: inner
+                .inputs
+                .keys()
+                .map(|name| (name.clone(), None))
+                .collect(),
             name: Name::from(name.as_ref()),
             inner,
         }
@@ -256,7 +267,7 @@ impl<State> Default for Node<State> {
 /// ```
 /// node! {
 ///     inputs:
-///         "value": sref!(graph "iFac"),
+///         "value": ssref!(graph "iFac"),
 ///     outputs:
 ///         "value": SocketValue::Number(None);
 ///     |_inputs, _outputs| ()
@@ -266,12 +277,34 @@ impl<State> Default for Node<State> {
 ///
 /// See [Shader::new] for an example function.
 macro_rules! node {
-    ( import $name:literal $imported:expr ) => {
-        Node::Imported(
-            $imported
+    ( import $name:literal $imported:expr $(, inputs: $($input:literal : $socket_ref:expr)+)? $(,)?) => {
+        Node::Imported({
+            let mut res = $imported
                 .get($name)
-                .expect(format!("Could not find imported node {}. Imported nodes are: {}",
-                    $name, $imported.keys().cloned().collect::<Vec<String>>().join(", ")).as_str()).clone())
+                .expect(format!("Could not find imported node `{}`. Imported nodes are: {}",
+                    $name, $imported.keys().cloned().collect::<Vec<String>>().join(", ")).as_str()).clone();
+
+            $(
+                $(
+                    let inputs = res
+                        .inputs
+                        .keys()
+                        .map(String::from)
+                        .collect::<Vec<String>>()
+                        .join(", ");
+
+                    *res.inputs.get_mut(&$input.into()).expect(
+                        format!(
+                            "Could not find input `{}` for node `{}`. Node's inputs are: {}",
+                            $input, $name, inputs
+                        )
+                        .as_str(),
+                    ) = $socket_ref;
+                )+
+            )?
+
+            res
+        })
     };
 
     { $($field:ident : $($o_name:literal : $value:expr),+),+; $shader:expr $(,)? } => {
@@ -311,7 +344,7 @@ mod test {
                     GraphNode {
                         inputs: std::iter::once((
                             Name::from("value"),
-                            SocketRef::Graph(Name::from("iFac")),
+                            Some(SocketRef::Graph(Name::from("iFac"))),
                         ))
                         .collect(),
                         outputs: std::iter::once((Name::from("value"), SocketValue::Number(None)))
@@ -324,7 +357,10 @@ mod test {
                     GraphNode {
                         inputs: std::iter::once((
                             Name::from("value"),
-                            SocketRef::Node(NodeId::from("identity"), Name::from("value")),
+                            Some(SocketRef::Node(
+                                NodeId::from("identity"),
+                                Name::from("value"),
+                            )),
                         ))
                         .collect(),
                         outputs: [(Name::from("value"), SocketValue::Number(None))]
@@ -355,13 +391,13 @@ mod test {
             nodes:
                 "identity": node! {
                     inputs:
-                        "value": sref!(graph "iFac"),
+                        "value": ssref!(graph "iFac"),
                     outputs:
                         "value": SocketValue::Number(None)
                 },
                 "invert": node! {
                     inputs:
-                        "value": sref!(node "identity" "value"),
+                        "value": ssref!(node "identity" "value"),
                     outputs:
                         "value": SocketValue::Number(None);
                 },

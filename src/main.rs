@@ -18,7 +18,7 @@ fn main() {
                 nodes:
                     "invert": node! {
                         inputs:
-                            "value": sref!(graph "iFac"),
+                            "value": ssref!(graph "iFac"),
                         outputs:
                             "value": SocketType::Number.into();
                         |inputs, outputs| {
@@ -40,7 +40,11 @@ fn main() {
         inputs:
             "iFac": SocketValue::Number(Some(2.)),
         nodes:
-            "inner": node!(import "invert" imported),
+            "inner": node!{
+                import "invert" imported,
+                inputs:
+                    "iFac": ssref!(graph "iFac"),
+            },
         outputs:
             "oFac": (ssref!(node "invert" "value"), SocketType::Number.into()),
     }
