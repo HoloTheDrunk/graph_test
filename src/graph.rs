@@ -295,21 +295,18 @@ macro_rules! node {
 
             $(
                 $(
+                    let len = res.inputs.len();
                     let inputs = res
                         .inputs
                         .keys()
                         .map(String::from)
                         .collect::<Vec<String>>()
                         .join(", ");
-                    let len = res.inputs.len();
-
-                    dbg!(&res);
-                    dbg!(&$input);
 
                     *res.inputs.get_mut(&$input.into()).expect(
                         format!(
-                            "Could not find input `{}` for node `{}`. Node's inputs are: [{}] ({})",
-                            $input, $name, inputs, len
+                            "Could not find input `{}` for node `{}`. Node's inputs are: ({}) [{}]",
+                            $input, $name, len, inputs
                         )
                         .as_str(),
                     ) = $socket_ref;

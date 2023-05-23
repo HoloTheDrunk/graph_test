@@ -9,45 +9,45 @@ use shader::*;
 fn main() {
     let mut imported = HashMap::new();
     imported.insert(
-        "invert".to_owned(),
+        "identity".to_owned(),
         ImportedNode::from((
-            "invert",
+            "identity",
             graph! {
                 inputs:
-                    "iFac": SocketValue::Number(Some(2.)),
+                    "value": SocketValue::Number(Some(0.)),
                 nodes:
-                    "invert": node! {
+                    "id": node! {
                         inputs:
-                            "value": ssref!(graph "iFac"),
+                            "value": None,
                         outputs:
                             "value": SocketType::Number.into();
                         |inputs, outputs| {
-                            get_sv!(input  | inputs  . "value" : Number > in_value);
+                            get_sv!(input | inputs . "value" : Number > in_value);
                             get_sv!(output | outputs . "value" : Number > out_value);
 
-                            *out_value.get_or_insert(0.) = 1. - in_value.unwrap_or(0.);
+                            *out_value.get_or_insert(0.) = in_value.unwrap_or(0.);
 
                             Ok(())
                         }
                     },
                 outputs:
-                    "oFac": (ssref!(node "invert" "value"), SocketType::Number.into()),
+                    "value": (ssref!(node "id" "value"), SocketType::Number.into()),
             },
         )),
     );
 
-    dbg!(graph! {
+    let graph = graph! {
         inputs:
-            "iFac": SocketValue::Number(Some(2.)),
+            "value": SocketValue::Number(Some(2.)),
         nodes:
             "inner": node!{
-                import "invert" imported,
+                import "identity" imported,
                 inputs:
-                    "iFac": ssref!(graph "iFac"),
+                    "value": ssref!(graph "value"),
             },
         outputs:
-            "oFac": (ssref!(node "invert" "value"), SocketType::Number.into()),
+            "value": (ssref!(node "inner" "value"), SocketType::Number.into()),
     }
     .validate()
-    .unwrap());
+    .unwrap();
 }
