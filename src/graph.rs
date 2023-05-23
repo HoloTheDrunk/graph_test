@@ -194,7 +194,22 @@ impl Graph<Unvalidated> {
             }
         }
 
-        todo!("Implement graph validation");
+        let Self {
+            inputs,
+            outputs,
+            nodes,
+            state: _state,
+        } = self;
+
+        Ok(Graph {
+            inputs,
+            outputs,
+            nodes: nodes
+                .into_iter()
+                .map(|(k, v)| Ok((k, v.validate()?)))
+                .collect::<Result<_, Error>>()?,
+            state: PhantomData::<Validated>,
+        })
     }
 }
 
@@ -249,6 +264,22 @@ impl<T: AsRef<str>, State> From<(T, Graph<State>)> for ImportedNode<State> {
     }
 }
 
+impl ImportedNode<Unvalidated> {
+    fn validate(self) -> Result<ImportedNode<Validated>, Error> {
+        let ImportedNode {
+            name,
+            inputs,
+            inner,
+        } = self;
+
+        Ok(ImportedNode {
+            name,
+            inputs,
+            inner: inner.validate()?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node<State> {
     Graph(GraphNode),
@@ -258,6 +289,15 @@ pub enum Node<State> {
 impl<State> Default for Node<State> {
     fn default() -> Self {
         Self::Graph(GraphNode::default())
+    }
+}
+
+impl Node<Unvalidated> {
+    fn validate(self) -> Result<Node<Validated>, Error> {
+        Ok(match self {
+            Node::Graph(node) => Node::Graph(node),
+            Node::Imported(node) => Node::Imported(node.validate()?),
+        })
     }
 }
 
