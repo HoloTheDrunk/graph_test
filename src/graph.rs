@@ -131,7 +131,7 @@ macro_rules! states {
 }
 states!(Unvalidated, Validated);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     Cycle(NodeId),
 }
@@ -148,9 +148,9 @@ pub struct Graph<State> {
 
 #[macro_export]
 macro_rules! graph {
-    { $($field:ident : $($name:literal : $value:expr),+),+ $(,)? } => {
+    { $($field:ident $(: $($name:literal : $value:expr),+)? $(,)?),+ } => {
         Graph {
-            $($field: [$(($name.into(), $value)),+].into_iter().collect()),+,
+            $($field: [$($(($name.into(), $value)),+)?].into_iter().collect()),+,
             state: ::std::marker::PhantomData::<Unvalidated>,
         }
     };
@@ -277,6 +277,15 @@ impl<State> Default for Node<State> {
 ///
 /// See [Shader::new] for an example function.
 macro_rules! node {
+    ( import $name:literal $imported:expr $(,)?) => {
+        Node::Imported(
+            $imported
+                .get($name)
+                .expect(format!("Could not find imported node `{}`. Imported nodes are: {}",
+                    $name, $imported.keys().cloned().collect::<Vec<String>>().join(", ")).as_str()).clone()
+        )
+    };
+
     ( import $name:literal $imported:expr $(, inputs: $($input:literal : $socket_ref:expr)+)? $(,)?) => {
         Node::Imported({
             let mut res = $imported
@@ -292,11 +301,15 @@ macro_rules! node {
                         .map(String::from)
                         .collect::<Vec<String>>()
                         .join(", ");
+                    let len = res.inputs.len();
+
+                    dbg!(&res);
+                    dbg!(&$input);
 
                     *res.inputs.get_mut(&$input.into()).expect(
                         format!(
-                            "Could not find input `{}` for node `{}`. Node's inputs are: {}",
-                            $input, $name, inputs
+                            "Could not find input `{}` for node `{}`. Node's inputs are: [{}] ({})",
+                            $input, $name, inputs, len
                         )
                         .as_str(),
                     ) = $socket_ref;
@@ -307,16 +320,16 @@ macro_rules! node {
         })
     };
 
-    { $($field:ident : $($o_name:literal : $value:expr),+),+; $shader:expr $(,)? } => {
+    { $($field:ident $(: $($o_name:literal : $value:expr),+)?),+; $shader:expr $(,)? } => {
         Node::Graph(GraphNode {
-            $($field: [$(($o_name.into(), $value)),+].into_iter().collect()),+,
+            $($field: [$($(($o_name.into(), $value)),+)?].into_iter().collect()),+,
             shader: Shader::new($shader),
         })
     };
 
-    { $($field:ident : $($o_name:literal : $value:expr),+),+ $(,)? $(;)? } => {
+    { $($field:ident $(: $($o_name:literal : $value:expr),+)?),+ $(,)? $(;)? } => {
         Node::Graph(GraphNode {
-            $($field: [$(($o_name.into(), $value)),+].into_iter().collect()),+,
+            $($field: [$($(($o_name.into(), $value)),+)?].into_iter().collect()),+,
             shader: Shader::default(),
         })
     };
@@ -328,6 +341,70 @@ pub use {graph, node, sref, ssref};
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::get_sv;
+
+    fn setup_imports() -> HashMap<String, ImportedNode<Unvalidated>> {
+        std::iter::once((
+            "identity".to_owned(),
+            ImportedNode::from((
+                "identity",
+                graph! {
+                    inputs:
+                        "value": SocketValue::Number(Some(0.)),
+                    nodes:
+                        "id": node! {
+                            inputs:
+                                "value": None,
+                            outputs:
+                                "value": SocketType::Number.into();
+                            |inputs, outputs| {
+                                get_sv!(input | inputs . "value" : Number > in_value);
+                                get_sv!(output | outputs . "value" : Number > out_value);
+
+                                *out_value.get_or_insert(0.) = in_value.unwrap_or(0.);
+
+                                Ok(())
+                            }
+                        },
+                    outputs:
+                        "value": (ssref!(node "id" "value"), SocketType::Number.into()),
+                },
+            )),
+        ))
+        .collect()
+    }
+
+    #[test]
+    fn cycle_detection() {
+        let imported = setup_imports();
+
+        let validation_result = graph! {
+            inputs,
+            nodes:
+                "a": node! {
+                    import "identity" imported,
+                    inputs:
+                        "value": ssref!(node "b" "value"),
+                },
+                "b": node! {
+                    import "identity" imported,
+                    inputs:
+                        "value": ssref!(node "a" "value"),
+                },
+            outputs:
+                "value": (ssref!(node "a" "value"), SocketType::Number.into()),
+        }
+        .validate();
+
+        let expected = Error::Cycle(NodeId("a".to_owned()));
+
+        assert!(
+            validation_result.is_err(),
+            "Expected an error, got `{validation_result:?}`"
+        );
+
+        assert_eq!(validation_result.unwrap_err(), expected);
+    }
 
     #[test]
     fn macro_validity() {
@@ -393,13 +470,13 @@ mod test {
                     inputs:
                         "value": ssref!(graph "iFac"),
                     outputs:
-                        "value": SocketValue::Number(None)
+                        "value": SocketType::Number.into()
                 },
                 "invert": node! {
                     inputs:
                         "value": ssref!(node "identity" "value"),
                     outputs:
-                        "value": SocketValue::Number(None);
+                        "value": SocketType::Number.into();
                 },
             outputs:
                 "oFac": (ssref!(node "invert" "value"), SocketValue::Number(None)),

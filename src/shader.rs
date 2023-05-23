@@ -123,9 +123,9 @@ where
 /// [get](std::collections::HashMap::get)s the desired input/output field with error reporting
 macro_rules! get_sv {
     (input | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
-        let $name = $hashmap
-            .get(&$field.into())
-            .ok_or_else(|| crate::shader::Error::Missing(Side::Input, $field.into()))?;
+        let $name = $hashmap.get(&$field.into()).ok_or_else(|| {
+            crate::shader::Error::Missing(crate::shader::Side::Input, $field.into())
+        })?;
 
         #[rustfmt::skip]
         let crate::graph::SocketValue::$type($name) = $name
@@ -139,9 +139,9 @@ macro_rules! get_sv {
     };
 
     (output | $hashmap:ident . $field:literal : $type:ident > $name:ident) => {
-        let $name = $hashmap
-            .get_mut(&$field.into())
-            .ok_or_else(|| crate::shader::Error::Missing(Side::Output, $field.into()))?;
+        let $name = $hashmap.get_mut(&$field.into()).ok_or_else(|| {
+            crate::shader::Error::Missing(crate::shader::Side::Output, $field.into())
+        })?;
 
         #[rustfmt::skip]
         let crate::graph::SocketValue::$type(ref mut $name) = $name
