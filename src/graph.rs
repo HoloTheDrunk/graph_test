@@ -8,7 +8,7 @@ use std::{
 use crate::shader::Shader;
 
 macro_rules! socket_value {
-    { $($name:ident : $type:ty),+ $(,)? } => {
+    { $($name:ident : $type:ty = $default:expr),+ $(,)? } => {
         #[derive(Clone, Debug, PartialEq)]
         pub enum SocketValue {
             $(
@@ -32,11 +32,31 @@ macro_rules! socket_value {
             }
         }
 
-        // impl SocketValue {
-        //     pub fn matches(&self, other: &SocketValue) -> bool {
-        //         SocketType::from(self) == SocketType::from(other)
-        //     }
-        // }
+        impl SocketValue {
+            pub fn is_none(&self) -> bool {
+                match self {
+                    $(
+                        SocketValue::$name(opt) => opt.is_none()
+                    ),+
+                }
+            }
+
+            pub fn set_default(&mut self) {
+                match self {
+                    $(
+                        SocketValue::$name(ref mut opt) => *opt = Some($default)
+                    ),+
+                }
+            }
+
+            pub fn or_default(&mut self) -> &SocketValue {
+                if self.is_none() {
+                    self.set_default();
+                }
+
+                self
+            }
+        }
 
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub enum SocketType {
@@ -57,8 +77,8 @@ macro_rules! socket_value {
 }
 
 socket_value! {
-    Number: f32,
-    String: String,
+    Number: f32 = 0.,
+    String: String = String::from(""),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -134,6 +154,13 @@ states!(Unvalidated, Validated);
 #[derive(Debug, PartialEq)]
 pub enum Error {
     Cycle(NodeId),
+    Shader(super::shader::Error),
+}
+
+impl From<super::shader::Error> for Error {
+    fn from(value: super::shader::Error) -> Self {
+        Self::Shader(value)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -183,7 +210,7 @@ impl Graph<Unvalidated> {
                         Node::Imported(imported_node) => imported_node.inputs.values(),
                     };
 
-                    for socket_ref in inputs.flatten() {
+                    for socket_ref in inputs.map(|(opt, _type)| opt).flatten() {
                         match socket_ref {
                             SocketRef::Node(node_id, _name) => next.push_back(Some(node_id)),
                             // Ignore graph inputs
@@ -213,9 +240,103 @@ impl Graph<Unvalidated> {
     }
 }
 
+impl Graph<Validated> {
+    /// Run graph by computing connected shader nodes recursively.
+    /// The final results are contained in the graph's `outputs` hashmap.
+    pub fn run(&mut self) -> Result<(), Error> {
+        // Dirtily cloning the entire outputs hashmap but it works
+        self.outputs = self
+            .outputs
+            .clone()
+            .into_iter()
+            .map(|output| {
+                let (name, (socket_ref, mut value)) = output;
+
+                // Unconnected output
+                if socket_ref.is_none() {
+                    value.set_default();
+                    return Ok((name, (socket_ref, value)));
+                }
+
+                // Get rid of Option
+                let socket_ref = socket_ref.unwrap();
+                match &socket_ref {
+                    SocketRef::Node(node_id, name) => {
+                        // Recurse into node to run it
+                        self.run_node(node_id)?;
+                        // Get output value of node connected to graph output
+                        value = (*self
+                            .nodes
+                            .get(node_id)
+                            .unwrap()
+                            .outputs()
+                            .get(&name)
+                            .unwrap())
+                        .clone();
+                    }
+                    SocketRef::Graph(name) => value = self.inputs.get(&name).unwrap().clone(),
+                };
+
+                Ok((name, (Some(socket_ref), value)))
+            })
+            .collect::<Result<_, Error>>()?;
+
+        Ok(())
+    }
+
+    fn run_node(&mut self, node_id: &NodeId) -> Result<(), Error> {
+        let cur = self.nodes.get(node_id).unwrap().clone();
+
+        match cur {
+            Node::Graph(cur_inner) => {
+                let mut inputs = HashMap::new();
+
+                for (name, (socket_ref, r#type)) in cur_inner.inputs.into_iter() {
+                    if let Some(socket_ref) = socket_ref {
+                        let value = match socket_ref.clone() {
+                            SocketRef::Node(id, field) => todo!(),
+                            SocketRef::Graph(field) => todo!(),
+                        };
+                    } else {
+                        inputs.insert(name, r#type.into());
+                    }
+                }
+
+                let Some(Node::Graph(node)) = self.nodes.get_mut(node_id) else {unreachable!()};
+                node.shader.call(&inputs, &mut node.outputs)?;
+            }
+            Node::Imported(cur_inner) => {
+                for (name, (socket_ref, r#_type)) in cur_inner.inputs.into_iter() {
+                    if let Some(socket_ref) = socket_ref {
+                        let value = match socket_ref.clone() {
+                            SocketRef::Node(id, field) => {
+                                self.run_node(&id)?;
+                                (*self.nodes.get(&id).unwrap().outputs().get(&field).unwrap())
+                                    .clone()
+                            }
+                            SocketRef::Graph(field) => self.inputs.get(&field).unwrap().clone(),
+                        };
+
+                        let Some(Node::Imported(node)) = self.nodes.get_mut(node_id) else {unreachable!()};
+                        node.inner.inputs.insert(name, value);
+                    } else {
+                        let Some(Node::Imported(node)) = self.nodes.get_mut(node_id) else {unreachable!()};
+                        node.inner.inputs.get_mut(&name).unwrap().set_default();
+                    }
+                }
+
+                let Some(Node::Imported(node)) = self.nodes.get_mut(node_id) else {unreachable!()};
+                node.inner.run()?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct GraphNode {
-    pub inputs: HashMap<Name, Option<SocketRef>>,
+    pub inputs: HashMap<Name, (Option<SocketRef>, SocketType)>,
     pub outputs: HashMap<Name, SocketValue>,
 
     pub shader: Shader,
@@ -240,7 +361,7 @@ impl PartialEq for GraphNode {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedNode<State> {
     name: Name,
-    pub inputs: HashMap<Name, Option<SocketRef>>,
+    pub inputs: HashMap<Name, (Option<SocketRef>, SocketType)>,
     inner: Graph<State>,
 }
 
@@ -255,8 +376,8 @@ impl<T: AsRef<str>, State> From<(T, Graph<State>)> for ImportedNode<State> {
         Self {
             inputs: inner
                 .inputs
-                .keys()
-                .map(|name| (name.clone(), None))
+                .iter()
+                .map(|(name, value)| (name.clone(), (None, value.into())))
                 .collect(),
             name: Name::from(name.as_ref()),
             inner,
@@ -298,6 +419,27 @@ impl Node<Unvalidated> {
             Node::Graph(node) => Node::Graph(node),
             Node::Imported(node) => Node::Imported(node.validate()?),
         })
+    }
+}
+
+impl Node<Validated> {
+    fn inputs(&self) -> &HashMap<Name, (Option<SocketRef>, SocketType)> {
+        match self {
+            Node::Graph(node) => &node.inputs,
+            Node::Imported(node) => &node.inputs,
+        }
+    }
+
+    fn outputs(&self) -> HashMap<&Name, &SocketValue> {
+        match self {
+            Node::Graph(node) => node.outputs.iter().collect(),
+            Node::Imported(node) => node
+                .inner
+                .outputs
+                .iter()
+                .map(|(name, (_socket_ref, value))| (name, value))
+                .collect(),
+        }
     }
 }
 
@@ -391,7 +533,7 @@ mod test {
                     nodes:
                         "id": node! {
                             inputs:
-                                "value": None,
+                                "value": (None, SocketType::Number),
                             outputs:
                                 "value": SocketType::Number.into();
                             |inputs, outputs| {
@@ -421,12 +563,12 @@ mod test {
                 "a": node! {
                     import "identity" imported,
                     inputs:
-                        "value": ssref!(node "b" "value"),
+                        "value": (ssref!(node "b" "value"), SocketType::Number),
                 },
                 "b": node! {
                     import "identity" imported,
                     inputs:
-                        "value": ssref!(node "a" "value"),
+                        "value": (ssref!(node "a" "value"), SocketType::Number),
                 },
             outputs:
                 "value": (ssref!(node "a" "value"), SocketType::Number.into()),
@@ -458,7 +600,10 @@ mod test {
                     GraphNode {
                         inputs: std::iter::once((
                             Name::from("value"),
-                            Some(SocketRef::Graph(Name::from("iFac"))),
+                            (
+                                Some(SocketRef::Graph(Name::from("iFac"))),
+                                SocketType::Number,
+                            ),
                         ))
                         .collect(),
                         outputs: std::iter::once((Name::from("value"), SocketValue::Number(None)))
@@ -471,10 +616,13 @@ mod test {
                     GraphNode {
                         inputs: std::iter::once((
                             Name::from("value"),
-                            Some(SocketRef::Node(
-                                NodeId::from("identity"),
-                                Name::from("value"),
-                            )),
+                            (
+                                Some(SocketRef::Node(
+                                    NodeId::from("identity"),
+                                    Name::from("value"),
+                                )),
+                                SocketType::Number,
+                            ),
                         ))
                         .collect(),
                         outputs: [(Name::from("value"), SocketValue::Number(None))]
@@ -505,13 +653,13 @@ mod test {
             nodes:
                 "identity": node! {
                     inputs:
-                        "value": ssref!(graph "iFac"),
+                        "value": (ssref!(graph "iFac"), SocketType::Number),
                     outputs:
                         "value": SocketType::Number.into()
                 },
                 "invert": node! {
                     inputs:
-                        "value": ssref!(node "identity" "value"),
+                        "value": (ssref!(node "identity" "value"), SocketType::Number),
                     outputs:
                         "value": SocketType::Number.into();
                 },

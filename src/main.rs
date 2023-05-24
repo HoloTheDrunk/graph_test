@@ -18,7 +18,7 @@ fn main() {
                 nodes:
                     "id": node! {
                         inputs:
-                            "value": None,
+                            "value": (None, SocketType::Number),
                         outputs:
                             "value": SocketType::Number.into();
                         |inputs, outputs| {
@@ -36,14 +36,14 @@ fn main() {
         )),
     );
 
-    let graph = graph! {
+    let _graph = graph! {
         inputs:
             "value": SocketValue::Number(Some(2.)),
         nodes:
             "inner": node!{
                 import "identity" imported,
                 inputs:
-                    "value": ssref!(graph "value"),
+                    "value": (ssref!(graph "value"), SocketType::Number),
             },
         outputs:
             "value": (ssref!(node "inner" "value"), SocketType::Number.into()),

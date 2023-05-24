@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::graph::{Name, SocketType, SocketValue};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     Missing(Side, Name),
     MismatchedTypes((Name, SocketType), (Name, SocketType)),
@@ -14,7 +14,7 @@ pub enum Error {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Side {
     Input,
     Output,
