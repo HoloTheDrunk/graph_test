@@ -18,7 +18,7 @@ fn main() {
                 nodes:
                     "id": node! {
                         inputs:
-                            "value": (None, SocketType::Number),
+                            "value": (ssref!(graph "value"), SocketType::Number),
                         outputs:
                             "value": SocketType::Number.into();
                         |inputs, outputs| {
@@ -36,7 +36,7 @@ fn main() {
         )),
     );
 
-    let _graph = graph! {
+    let mut graph = graph! {
         inputs:
             "value": SocketValue::Number(Some(2.)),
         nodes:
@@ -50,4 +50,14 @@ fn main() {
     }
     .validate()
     .unwrap();
+
+    let get_output =
+        |graph: &Graph<Validated>, name: &str| graph.outputs.get(&name.into()).unwrap().1.clone();
+
+    println!("Before: {:?}", get_output(&graph, "value"));
+
+    println!("Running graph...");
+    graph.run().unwrap();
+
+    println!("After: {:?}", get_output(&graph, "value"));
 }

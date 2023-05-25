@@ -284,7 +284,20 @@ impl Graph<Validated> {
         Ok(())
     }
 
+    /// Run node by computing its inputs recursively, then computing the contained shader
     fn run_node(&mut self, node_id: &NodeId) -> Result<(), Error> {
+        // Skip node if outputs are already computed.
+        if self
+            .nodes
+            .get(node_id)
+            .unwrap()
+            .outputs()
+            .iter()
+            .all(|(&_k, &v)| !v.is_none())
+        {
+            return Ok(());
+        }
+
         let cur = self.nodes.get(node_id).unwrap().clone();
 
         match cur {
@@ -293,10 +306,17 @@ impl Graph<Validated> {
 
                 for (name, (socket_ref, r#type)) in cur_inner.inputs.into_iter() {
                     if let Some(socket_ref) = socket_ref {
-                        let value = match socket_ref.clone() {
-                            SocketRef::Node(id, field) => todo!(),
-                            SocketRef::Graph(field) => todo!(),
-                        };
+                        inputs.insert(
+                            name,
+                            match socket_ref {
+                                SocketRef::Node(id, field) => {
+                                    self.run_node(&id)?;
+                                    (*self.nodes.get(&id).unwrap().outputs().get(&field).unwrap())
+                                        .clone()
+                                }
+                                SocketRef::Graph(field) => self.inputs.get(&field).unwrap().clone(),
+                            },
+                        );
                     } else {
                         inputs.insert(name, r#type.into());
                     }
